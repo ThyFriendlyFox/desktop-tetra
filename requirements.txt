@@ -1,0 +1,13 @@
+click>=8.1.7
+pyobjc-core>=10.3.1
+pyobjc>=10.3.1
+pyobjc-framework-Quartz>=10.3.1
+pyobjc-framework-ApplicationServices>=10.3.1
+pyobjc-framework-Cocoa>=10.3.1
+openai>=1.37.0
+anthropic>=0.34.2
+# Visual pipeline (cross-platform)
+mss>=9.0.2
+opencv-python>=4.10.0.84
+pillow>=10.4.0
+pytesseract>=0.3.10
