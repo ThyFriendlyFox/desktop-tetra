@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import json
+import time
 from typing import Any, Dict, List, Optional
 
 from .connectors import get_connector
@@ -74,3 +75,44 @@ class Agent:
                 ok = self._verify(expect)
             results.append({"action": action, "ok": ok, "error": error})
         return results
+
+    def is_goal_satisfied(self, success: Optional[Dict[str, Any]]) -> bool:
+        if not success:
+            return False
+        # Try live perception first
+        snap = LiveEngine.instance().snapshot()
+        if score_candidates(snap, success, top_k=1):
+            return True
+        # Fall back to connector wait (quick check)
+        return self.conn.wait_for(success, timeout_seconds=0.5)
+
+    def run_continuous(
+        self,
+        goal: str,
+        context: Optional[Dict[str, Any]] = None,
+        success: Optional[Dict[str, Any]] = None,
+        max_cycles: int = 10,
+        max_time_seconds: float = 120.0,
+        stagnation_limit: int = 2,
+    ) -> Dict[str, Any]:
+        start = time.time()
+        cycles = 0
+        stagnation = 0
+        history: List[Dict[str, Any]] = []
+        while cycles < max_cycles and (time.time() - start) < max_time_seconds:
+            if self.is_goal_satisfied(success):
+                return {"done": True, "cycles": cycles, "history": history}
+            plan = self.plan(goal, context=context)
+            results = self.execute_steps(plan)
+            history.append({"plan": plan, "results": results})
+            ok_count = sum(1 for r in results if r.get("ok"))
+            if ok_count == 0:
+                stagnation += 1
+            else:
+                stagnation = 0
+            if stagnation >= stagnation_limit:
+                # Small adaptive delay; could broaden search or refocus app here
+                time.sleep(0.4)
+                stagnation = 0
+            cycles += 1
+        return {"done": self.is_goal_satisfied(success), "cycles": cycles, "history": history}

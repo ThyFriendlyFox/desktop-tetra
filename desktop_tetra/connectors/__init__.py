@@ -9,6 +9,9 @@ from .macos import MacOSConnector
 
 def get_connector(os_override: Optional[str] = None) -> DesktopConnector:
     name = (os_override or platform.system()).lower()
+    if name == "sim":
+        from .sim import SimConnector
+        return SimConnector()
     if name == "darwin":
         return MacOSConnector()
     if name == "windows":

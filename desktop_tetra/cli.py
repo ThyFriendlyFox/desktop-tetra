@@ -10,6 +10,7 @@ from .recorder import ActionRecorder
 from .agent import Agent
 from .interaction.livefeed import LiveFeed
 from .interaction.engine import LiveEngine
+from .interaction.sim.engine import SimEngine
 
 
 @click.group()
@@ -42,44 +43,32 @@ def live_start(monitor: int, fps: int) -> None:
     lf.stop()
 
 
-@cli.command("press")
-@click.option("--title", type=str, default=None)
-@click.option("--role", type=str, default=None)
-@click.option("--app", type=str, default=None)
-@click.option("--timeout", type=float, default=3.0)
-@click.option("--contains/--exact", default=True, help="Title match mode")
-def press_cmd(title: Optional[str], role: Optional[str], app: Optional[str], timeout: float, contains: bool) -> None:
-    finder = AXFinder()
-    el = finder.find_element(title=title, role=role, app=app, timeout_seconds=timeout, contains=contains)
-    if el is None:
-        raise click.ClickException("Element not found")
-    if not finder.press(el):
-        raise click.ClickException("AXPress failed")
+@cli.group()
+def sim() -> None:
+    """Simulation controls"""
 
 
-@cli.command("set")
-@click.option("--title", type=str, default=None)
-@click.option("--role", type=str, default=None)
-@click.option("--app", type=str, default=None)
-@click.option("--timeout", type=float, default=3.0)
-@click.option("--value", type=str, required=True)
-@click.option("--contains/--exact", default=True)
-def set_cmd(title: Optional[str], role: Optional[str], app: Optional[str], timeout: float, value: str, contains: bool) -> None:
-    finder = AXFinder()
-    el = finder.find_element(title=title, role=role, app=app, timeout_seconds=timeout, contains=contains)
-    if el is None:
-        raise click.ClickException("Element not found")
-    if not finder.set_value(el, value):
-        raise click.ClickException("Set value failed")
+@sim.command("start")
+@click.option("--hz", type=int, default=4)
+@click.option("--seed", type=int, default=0)
+def sim_start(hz: int, seed: int) -> None:
+    eng = SimEngine.instance(tick_hz=hz, seed=seed)
+    eng.start()
+    time.sleep(0.2)
+    click.echo(json.dumps({"sim": "started", "nodes": len(eng.snapshot().get("order", []))}, indent=2))
 
 
-@cli.command("scan")
-@click.option("--app", type=str, default=None, help="Bundle id or name; default frontmost")
-@click.option("--depth", type=int, default=4)
-def scan_cmd(app: Optional[str], depth: int) -> None:
-    finder = AXFinder()
-    tree = finder.build_semantic_map(app=app, max_depth=depth)
-    click.echo(json.dumps(tree, indent=2))
+@sim.command("stop")
+def sim_stop() -> None:
+    eng = SimEngine.instance()
+    eng.stop()
+    click.echo(json.dumps({"sim": "stopped"}, indent=2))
+
+
+@sim.command("status")
+def sim_status() -> None:
+    eng = SimEngine.instance_if_running()
+    click.echo(json.dumps({"running": eng is not None, "nodes": (len(eng.snapshot().get("order", [])) if eng else 0)}, indent=2))
 
 
 @cli.command("goal")
@@ -88,21 +77,38 @@ def scan_cmd(app: Optional[str], depth: int) -> None:
 @click.option("--model", type=str, default="gpt-4o-mini")
 @click.option("--api-key", type=str, default=None)
 @click.option("--base-url", type=str, default=None)
-@click.option("--os", "os_override", type=str, default=None, help="Force platform: darwin|windows")
+@click.option("--os", "os_override", type=str, default=None, help="Force platform: sim|darwin|windows")
 @click.option("--context", type=str, default=None, help="JSON string with hints")
-def goal_cmd(goal: str, provider: str, model: str, api_key: Optional[str], base_url: Optional[str], os_override: Optional[str], context: Optional[str]) -> None:
+@click.option("--continuous/--no-continuous", default=False)
+@click.option("--infinite/--no-infinite", default=False)
+@click.option("--max-cycles", type=int, default=10)
+@click.option("--timeout", type=float, default=120.0)
+@click.option("--success", type=str, default=None, help='JSON selector, e.g. {"role":"StaticText","title":"Done"}')
+def goal_cmd(goal: str, provider: str, model: str, api_key: Optional[str], base_url: Optional[str], os_override: Optional[str], context: Optional[str], continuous: bool, infinite: bool, max_cycles: int, timeout: float, success: Optional[str]) -> None:
     ctx = None
     if context:
         try:
             ctx = json.loads(context)
         except json.JSONDecodeError:
             raise click.ClickException("--context must be valid JSON")
-    # Ensure live engine is running to provide CRDT perception
+    success_sel = None
+    if success:
+        try:
+            success_sel = json.loads(success)
+        except json.JSONDecodeError:
+            raise click.ClickException("--success must be valid JSON selector")
     LiveEngine.instance().start()
     agent = Agent(model=model, provider=provider, api_key=api_key, base_url=base_url, os_override=os_override)
-    plan = agent.plan(goal, context=ctx)
-    results = agent.execute_steps(plan)
-    out = {"plan": plan, "results": results}
+    if infinite or continuous:
+        if infinite:
+            # Run with unbounded cycles/time (practically high caps)
+            out = agent.run_continuous(goal, context=ctx, success=success_sel, max_cycles=10**9, max_time_seconds=10**9)
+        else:
+            out = agent.run_continuous(goal, context=ctx, success=success_sel, max_cycles=max_cycles, max_time_seconds=timeout)
+    else:
+        plan = agent.plan(goal, context=ctx)
+        results = agent.execute_steps(plan)
+        out = {"plan": plan, "results": results}
     click.echo(json.dumps(out, indent=2))
 
 
