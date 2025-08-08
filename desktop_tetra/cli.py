@@ -11,6 +11,8 @@ from .agent import Agent
 from .interaction.livefeed import LiveFeed
 from .interaction.engine import LiveEngine
 from .interaction.sim.engine import SimEngine
+from .connectors import get_connector
+from .input_control import InputController
 
 
 @click.group()
@@ -110,6 +112,46 @@ def goal_cmd(goal: str, provider: str, model: str, api_key: Optional[str], base_
         results = agent.execute_steps(plan)
         out = {"plan": plan, "results": results}
     click.echo(json.dumps(out, indent=2))
+
+
+@cli.command("focus-app")
+@click.option("--app", type=str, required=True)
+def focus_app_cmd(app: str) -> None:
+    """Focus or launch an application by name or bundle id."""
+    conn = get_connector()
+    if not conn.focus_app(app):
+        raise click.ClickException(f"Failed to focus app: {app}")
+    click.echo(json.dumps({"focused": app}, indent=2))
+
+
+@cli.command("click")
+@click.option("--title", type=str, default=None, help="Element title, e.g. button text")
+@click.option("--role", type=str, default=None, help="AX role, e.g. AXButton")
+@click.option("--app", type=str, default=None, help="Target app name or bundle id")
+@click.option("--contains/--no-contains", default=False, help="Title substring match vs exact")
+@click.option("--timeout", type=float, default=3.0)
+def click_cmd(title: Optional[str], role: Optional[str], app: Optional[str], contains: bool, timeout: float) -> None:
+    """Find an element and press it."""
+    if not title and not role:
+        raise click.ClickException("Provide at least one of --title or --role")
+    conn = get_connector()
+    selector = {"title": title, "role": role, "app": app, "contains": contains}
+    selector = {k: v for k, v in selector.items() if v is not None}
+    el = conn.find_element(selector, timeout_seconds=timeout)
+    if not el:
+        raise click.ClickException("Element not found")
+    if not conn.press(el):
+        raise click.ClickException("Failed to press element")
+    click.echo(json.dumps({"clicked": True, "selector": selector}, indent=2))
+
+
+@cli.command("type")
+@click.option("--text", type=str, required=True, help="Text to type to the focused field")
+def type_cmd(text: str) -> None:
+    """Type text into the currently focused field/window."""
+    ic = InputController()
+    ic.type_text(text)
+    click.echo(json.dumps({"typed": len(text)}, indent=2))
 
 
 @cli.command()
